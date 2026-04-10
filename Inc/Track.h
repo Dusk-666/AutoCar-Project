@@ -4,7 +4,7 @@
 #include "main.h"
 
 /* ==================== 基础速度参数 ==================== */
-#define TRACK_RIGHT_BASE_SPEED    250 右轮基础速度
+#define TRACK_RIGHT_BASE_SPEED    450   // 右轮基础速度
 #define TRACK_SPEED_RATIO         1778  // 速度比例（左轮速度 = 右轮速度 × 1.778）
 
 /* ==================== 速度限制参数 ==================== */
@@ -21,12 +21,14 @@
 #define TURN_OUTER_RATIO          130   // 外轮速度比例（百分比，130表示130%）
 #define SPEED_RAMP_STEP           20    // 速度渐变步长，每次调整的量
 
-/* ==================== 状态机参数 ==================== */
-#define OUTER_SENSOR_CONFIRM      3     // 外侧传感器确认次数，防止误触发
-#define MAX_TURN_TIME             100   // 最大转弯时间（控制周期数，100×5ms=500ms）
-
 /* ==================== 十字路口参数 ==================== */
-#define CROSS_SPEED_RATIO        100  // 十字路口速度比例（百分比，60表示60%）
+#define CROSS_SPEED_RATIO         100   // 十字路口速度比例（百分比，60表示60%）
+
+/* ==================== 直角转弯参数 ==================== */
+#define RIGHT_ANGLE_CONFIRM       3     // 直角识别确认次数（连续检测到外侧传感器的次数）
+#define APPROACH_TIME             20    // 接近时间（控制周期数，20×5ms=100ms）
+#define RIGHT_ANGLE_TURN_TIME     80    // 直角转弯时间（控制周期数，80×5ms=400ms）
+#define RIGHT_ANGLE_SPEED_RATIO   70    // 直角转弯速度比例（百分比，70表示70%）
 
 /* ==================== 传感器状态定义 ==================== */
 #define SENSOR_BLACK              0     // 检测到黑线
@@ -35,6 +37,7 @@
 /* ==================== 状态定义 ==================== */
 typedef enum {
     TRACKING,      // 正常循迹状态（使用PD控制）
+    APPROACH,      // 接近直角状态（向前走一小段）
     TURN_LEFT,     // 大角度左转状态（使用差速转向）
     TURN_RIGHT,    // 大角度右转状态（使用差速转向）
     STOP           // 停车状态
