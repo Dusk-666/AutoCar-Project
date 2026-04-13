@@ -142,6 +142,7 @@ static struct {
     uint8_t right_angle_left_count;  // 直角左转识别计数
     uint8_t right_angle_right_count; // 直角右转识别计数
     uint16_t approach_count;       // 接近计数器
+    uint8_t cross_count;           // 十字路口识别计数
 } ctx;
 
 /* ==================== 初始化函数 ==================== */
@@ -155,11 +156,11 @@ void Track_Init(void)
     // 使能电机驱动芯片（PB6和PB7置高）
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
-    
+
     // 初始化电机为停止状态
     Track_SetLeftMotor(1, 0);
     Track_SetRightMotor(1, 0);
-    
+
     // 初始化状态机上下文
     ctx.state = TRACKING;
     ctx.error = 0;
@@ -172,6 +173,7 @@ void Track_Init(void)
     ctx.right_angle_left_count = 0;
     ctx.right_angle_right_count = 0;
     ctx.approach_count = 0;
+    ctx.cross_count = 0;
 }
 
 /* ==================== 主控制循环 ==================== */
@@ -187,45 +189,37 @@ void Track_ControlLoop(void)
     uint8_t left_in = Track_ReadLeftIn();     // 左内传感器
     uint8_t right_in = Track_ReadRightIn();   // 右内传感器
     uint8_t right_out = Track_ReadRightOut(); // 右外传感器
-    
+
     // ========== 2. 检测特殊情况：全黑或全白 ==========
-    uint8_t all_black = (left_out == SENSOR_BLACK && left_in == SENSOR_BLACK && 
+    uint8_t all_black = (left_out == SENSOR_BLACK && left_in == SENSOR_BLACK &&
                          right_in == SENSOR_BLACK && right_out == SENSOR_BLACK);
-    uint8_t all_white = (left_out == SENSOR_WHITE && left_in == SENSOR_WHITE && 
+    uint8_t all_white = (left_out == SENSOR_WHITE && left_in == SENSOR_WHITE &&
                          right_in == SENSOR_WHITE && right_out == SENSOR_WHITE);
-    
+
     // ========== 3. 状态机主逻辑 ==========
     switch (ctx.state)
     {
         /* ---------- TRACKING状态：使用PD控制 ---------- */
         case TRACKING:
         {
-            // 处理十字路口（全黑）：减速直行通过
             if (all_black)
             {
-                // 计算目标速度：降低速度通过十字路口
-                int left_target = (TRACK_RIGHT_BASE_SPEED * CROSS_SPEED_RATIO) / 100;
-                int right_target = (TRACK_RIGHT_BASE_SPEED * CROSS_SPEED_RATIO) / 100;
-                
-                // 应用速度比例
-                left_target = Track_RightToLeftSpeed(left_target);
-                
-                // 限制速度
-                left_target = Track_ClampSpeed(left_target);
-                right_target = Track_ClampSpeed(right_target);
-                
-                // 速度渐变
-                ctx.left_actual_speed = Track_RampSpeed(ctx.left_actual_speed, left_target, SPEED_RAMP_STEP);
-                ctx.right_actual_speed = Track_RampSpeed(ctx.right_actual_speed, right_target, SPEED_RAMP_STEP);
-                
-                // 设置电机速度
+                ctx.cross_count++;
+                if (ctx.cross_count >= CROSS_CONFIRM)
+                {
+                    ctx.state = STOP;
+                    ctx.cross_count = 0;
+                    break;
+                }
                 Track_SetLeftMotor(1, ctx.left_actual_speed);
                 Track_SetRightMotor(1, ctx.right_actual_speed);
-                
-                // 保持TRACKING状态，等待传感器恢复正常
                 break;
             }
-            
+            else
+            {
+                ctx.cross_count = 0;
+            }
+
             // 处理脱线（全白）：保持当前速度继续前进
             if (all_white)
             {
@@ -233,11 +227,11 @@ void Track_ControlLoop(void)
                 // 小车会按照惯性继续前进，直到找到黑线
                 Track_SetLeftMotor(1, ctx.left_actual_speed);
                 Track_SetRightMotor(1, ctx.right_actual_speed);
-                
+
                 // 保持TRACKING状态，等待传感器恢复正常
                 break;
             }
-            
+
             // ========== 直角识别逻辑 ==========
             // 只要最外侧传感器检测到黑线，就认为是直角
             if (left_out == SENSOR_BLACK)
@@ -256,7 +250,7 @@ void Track_ControlLoop(void)
             {
                 ctx.right_angle_left_count = 0;
             }
-            
+
             if (right_out == SENSOR_BLACK)
             {
                 ctx.right_angle_right_count++;
@@ -273,7 +267,7 @@ void Track_ControlLoop(void)
             {
                 ctx.right_angle_right_count = 0;
             }
-            
+
             // 计算误差值
             // 误差定义：负值表示偏右，正值表示偏左
             if (left_in == SENSOR_BLACK && right_in == SENSOR_BLACK)
@@ -292,61 +286,58 @@ void Track_ControlLoop(void)
             {
                 ctx.error = 0;  // 默认情况
             }
-            
+
             // PD控制计算
             // 转向量 = Kp × 误差 + Kd × 误差变化率
             int p_term = TRACK_KP * ctx.error;
             int d_term = TRACK_KD * (ctx.error - ctx.last_error);
             int steer = p_term + d_term;
-            
+
             // 限制转向量，防止过大的转向
             if (steer > TRACK_MAX_STEER) steer = TRACK_MAX_STEER;
             if (steer < -TRACK_MAX_STEER) steer = -TRACK_MAX_STEER;
-            
+
             // 计算目标速度
             // 左轮速度 = 基础速度 + 转向量
             // 右轮速度 = 基础速度 - 转向量
             int left_target = TRACK_RIGHT_BASE_SPEED + steer;
             int right_target = TRACK_RIGHT_BASE_SPEED - steer;
-            
+
             // 限制速度在有效范围内
             left_target = Track_ClampSpeed(left_target);
             right_target = Track_ClampSpeed(right_target);
-            
-            // 应用速度比例：左轮速度 = 右轮速度 × 1.778
-            left_target = Track_RightToLeftSpeed(left_target);
-            
+
             // 速度渐变，实现平滑过渡
             ctx.left_actual_speed = Track_RampSpeed(ctx.left_actual_speed, left_target, SPEED_RAMP_STEP);
             ctx.right_actual_speed = Track_RampSpeed(ctx.right_actual_speed, right_target, SPEED_RAMP_STEP);
-            
+
             // 设置电机速度
             Track_SetLeftMotor(1, ctx.left_actual_speed);
             Track_SetRightMotor(1, ctx.right_actual_speed);
-            
+
             // 保存当前误差用于下次计算
             ctx.last_error = ctx.error;
             break;
         }
-        
+
         /* ---------- APPROACH状态：接近直角，向前走一小段 ---------- */
         case APPROACH:
         {
             // 向前直走，保持当前速度
             int left_target = Track_RightToLeftSpeed(TRACK_RIGHT_BASE_SPEED);
             int right_target = TRACK_RIGHT_BASE_SPEED;
-            
+
             left_target = Track_ClampSpeed(left_target);
             right_target = Track_ClampSpeed(right_target);
-            
+
             ctx.left_actual_speed = Track_RampSpeed(ctx.left_actual_speed, left_target, SPEED_RAMP_STEP);
             ctx.right_actual_speed = Track_RampSpeed(ctx.right_actual_speed, right_target, SPEED_RAMP_STEP);
-            
+
             Track_SetLeftMotor(1, ctx.left_actual_speed);
             Track_SetRightMotor(1, ctx.right_actual_speed);
-            
+
             ctx.approach_count++;
-            
+
             // 检查是否到达转弯时间
             if (ctx.approach_count >= APPROACH_TIME)
             {
@@ -375,7 +366,7 @@ void Track_ControlLoop(void)
                 ctx.approach_count = 0;
             }
             break;
-        }        
+        }
         /* ---------- TURN_LEFT状态：大角度左转 ---------- */
         case TURN_LEFT:
         {
@@ -384,29 +375,29 @@ void Track_ControlLoop(void)
             // 内轮（右轮）速度 = 基础速度 × 40%
             int left_target = (TRACK_RIGHT_BASE_SPEED * TURN_OUTER_RATIO) / 100;
             int right_target = (TRACK_RIGHT_BASE_SPEED * TURN_INNER_RATIO) / 100;
-            
+
             // 确保速度不小于最小值
             if (left_target < MIN_SPEED) left_target = MIN_SPEED;
             right_target = Track_ClampSpeed(right_target);
-            
+
             // 应用速度比例
             left_target = Track_RightToLeftSpeed(left_target);
-            
+
             // 速度渐变
             ctx.left_actual_speed = Track_RampSpeed(ctx.left_actual_speed, left_target, SPEED_RAMP_STEP);
             ctx.right_actual_speed = Track_RampSpeed(ctx.right_actual_speed, right_target, SPEED_RAMP_STEP);
-            
+
             // 设置电机速度
             Track_SetLeftMotor(1, ctx.left_actual_speed);
             Track_SetRightMotor(1, ctx.right_actual_speed);
-            
+
             // 转弯时间计数
             ctx.turn_count++;
-            
+
             // 检查退出条件
             // 条件1：中间两个传感器都检测到黑线，说明已经恢复居中
             // 条件2：转弯时间超过最大值（防止卡死）
-            if ((left_in == SENSOR_BLACK && right_in == SENSOR_BLACK) || 
+            if ((left_in == SENSOR_BLACK && right_in == SENSOR_BLACK) ||
                 ctx.turn_count >= RIGHT_ANGLE_TURN_TIME)
             {
                 ctx.state = TRACKING;
@@ -415,7 +406,7 @@ void Track_ControlLoop(void)
             }
             break;
         }
-        
+
         /* ---------- TURN_RIGHT状态：大角度右转 ---------- */
         case TURN_RIGHT:
         {
@@ -424,29 +415,29 @@ void Track_ControlLoop(void)
             // 外轮（右轮）速度 = 基础速度 × 130%
             int left_target = (TRACK_RIGHT_BASE_SPEED * TURN_INNER_RATIO) / 100;
             int right_target = (TRACK_RIGHT_BASE_SPEED * TURN_OUTER_RATIO) / 100;
-            
+
             // 应用速度比例
             left_target = Track_RightToLeftSpeed(left_target);
-            
+
             // 确保速度不小于最小值
             left_target = Track_ClampSpeed(left_target);
             if (right_target < MIN_SPEED) right_target = MIN_SPEED;
-            
+
             // 速度渐变
             ctx.left_actual_speed = Track_RampSpeed(ctx.left_actual_speed, left_target, SPEED_RAMP_STEP);
             ctx.right_actual_speed = Track_RampSpeed(ctx.right_actual_speed, right_target, SPEED_RAMP_STEP);
-            
+
             // 设置电机速度
             Track_SetLeftMotor(1, ctx.left_actual_speed);
             Track_SetRightMotor(1, ctx.right_actual_speed);
-            
+
             // 转弯时间计数
             ctx.turn_count++;
-            
+
             // 检查退出条件
             // 条件1：中间两个传感器都检测到黑线，说明已经恢复居中
             // 条件2：转弯时间超过最大值（防止卡死）
-            if ((left_in == SENSOR_BLACK && right_in == SENSOR_BLACK) || 
+            if ((left_in == SENSOR_BLACK && right_in == SENSOR_BLACK) ||
                 ctx.turn_count >= RIGHT_ANGLE_TURN_TIME)
             {
                 ctx.state = TRACKING;
@@ -455,18 +446,18 @@ void Track_ControlLoop(void)
             }
             break;
         }
-        
+
         /* ---------- STOP状态：停车 ---------- */
         case STOP:
         {
             // 停止所有电机
             Track_SetLeftMotor(1, 0);
             Track_SetRightMotor(1, 0);
-            
+
             // 重置实际速度
             ctx.left_actual_speed = 0;
             ctx.right_actual_speed = 0;
-            
+
             // 检查恢复条件：不是全黑且不是全白
             if (!all_black && !all_white)
             {
