@@ -3,48 +3,109 @@
 
 #include "main.h"
 
-/* ==================== 基础速度参数 ==================== */
-#define TRACK_RIGHT_BASE_SPEED    450   // 右轮基础速度
+/* ==================== 循迹外环参数 ==================== */
+#define TRACK_KP                        90.0f
+#define TRACK_KD                        38.0f
+#define APPROACH_KP                     125.0f
+#define APPROACH_KD                     48.0f
 
-/* ==================== 速度限制参数 ==================== */
-#define MIN_SPEED                 50    // 最小速度，确保电机始终转动
-#define MAX_SPEED                 999   // 最大速度（PWM上限）
+/* ==================== 速度内环参数 ==================== */
+#define SPEED_KP                        0.5f
+#define SPEED_KD                        0.1f
+#define ENCODER_PPR                     13
+#define WHEEL_DIAMETER                  0.065f
+#define GEAR_RATIO                      48.0f
+#define CONTROL_PERIOD_MS               5
 
-/* ==================== PD控制参数 ==================== */
-#define TRACK_KP                  40    // 比例系数：响应当前误差
-#define TRACK_KD                  25    // 微分系数：响应误差变化趋势
-#define TRACK_MAX_STEER           200   // 最大转向量，限制PD输出
+/* ==================== 速度目标参数 ==================== */
+#define BASE_SPEED                      400
+#define APPROACH_BASE_SPEED_RATIO       82
+#define FULL_BLACK_SPEED_RATIO          68
+#define LOST_LINE_SPEED_RATIO           72
+#define TURN_INNER_RATIO                0.40f
+#define TURN_OUTER_RATIO                1.30f
+#define TRACK_TARGET_LIMIT              600
+#define SPEED_TARGET_LIMIT              800
 
-/* ==================== 转弯参数 ==================== */
-#define TURN_INNER_RATIO          40    // 内轮速度比例（百分比，40表示40%）
-#define TURN_OUTER_RATIO          130   // 外轮速度比例（百分比，130表示130%）
-#define SPEED_RAMP_STEP           20    // 速度渐变步长，每次调整的量
+/* ==================== 状态机判定参数 ==================== */
+#define OUTER_TRIGGER_TURN_COUNT        3U
+#define OUTER_TRIGGER_DECAY_STEP        1U
+#define APPROACH_HOLD_TICKS             8U
+#define TURN_TIMEOUT_TICKS              55U
+#define TURN_EXIT_CONFIRM_TICKS         3U
+#define TURN_EXIT_ERROR_THRESHOLD       1.4f
+#define LOST_LINE_HOLD_ERROR            2.8f
+#define FULL_BLACK_ERROR_BAND           0.0f
 
-/* ==================== 十字路口参数 ==================== */
-#define CROSS_SPEED_RATIO         100   // 十字路口速度比例（百分比，60表示60%）
-#define CROSS_CONFIRM             10    // 十字路口识别确认次数（连续检测到全黑的次数）
-
-/* ==================== 直角转弯参数 ==================== */
-#define RIGHT_ANGLE_CONFIRM       3     // 直角识别确认次数（连续检测到外侧传感器的次数）
-#define APPROACH_TIME             20    // 接近时间（控制周期数，20×5ms=100ms）
-#define RIGHT_ANGLE_TURN_TIME     80    // 直角转弯时间（控制周期数，80×5ms=400ms）
-#define RIGHT_ANGLE_SPEED_RATIO   70    // 直角转弯速度比例（百分比，70表示70%）
-
-/* ==================== 传感器状态定义 ==================== */
-#define SENSOR_BLACK              0     // 检测到黑线
-#define SENSOR_WHITE              1     // 检测到白底
-
-/* ==================== 状态定义 ==================== */
-typedef enum {
-    TRACKING,      // 正常循迹状态（使用PD控制）
-    APPROACH,      // 接近直角状态（向前走一小段）
-    TURN_LEFT,     // 大角度左转状态（使用差速转向）
-    TURN_RIGHT,    // 大角度右转状态（使用差速转向）
-    STOP           // 停车状态
+typedef enum
+{
+    TRACKING = 0,
+    APPROACH,
+    TURN_LEFT,
+    TURN_RIGHT
 } TrackState;
 
-/* ==================== 函数声明 ==================== */
-void Track_Init(void);
-void Track_ControlLoop(void);
+typedef struct
+{
+    uint8_t left_outer;
+    uint8_t left_inner;
+    uint8_t right_inner;
+    uint8_t right_outer;
+    uint8_t active_count;
+    uint8_t all_black;
+    uint8_t all_white;
+} TrackSensorState;
+
+typedef struct
+{
+    TrackState state;
+    TrackSensorState sensors;
+    float current_error;
+    float last_error;
+    float last_valid_error;
+    float pd_turn_output;
+    int16_t base_speed;
+    int16_t left_target_speed;
+    int16_t right_target_speed;
+    int16_t left_actual_speed;
+    int16_t right_actual_speed;
+    int32_t left_encoder_count;
+    int32_t right_encoder_count;
+    int32_t last_left_encoder_count;
+    int32_t last_right_encoder_count;
+    float left_speed_error;
+    float right_speed_error;
+    float last_left_speed_error;
+    float last_right_speed_error;
+    uint8_t left_outer_counter;
+    uint8_t right_outer_counter;
+    uint8_t turn_exit_counter;
+    uint16_t state_tick;
+    int8_t pending_turn_direction;
+} TrackHandle;
+
+/**
+ * @brief 初始化循迹状态机上下文
+ * @param handle 循迹模块句柄
+ */
+void Track_Init(TrackHandle *handle);
+
+/**
+ * @brief 执行一次循迹外环更新并输出左右轮目标速度
+ * @param handle 循迹模块句柄
+ */
+void Track_Update(TrackHandle *handle);
+
+/**
+ * @brief 更新编码器计数并计算实际速度
+ * @param handle 循迹模块句柄
+ */
+void Track_UpdateEncoders(TrackHandle *handle);
+
+/**
+ * @brief 执行速度内环PD控制
+ * @param handle 循迹模块句柄
+ */
+void Track_RunSpeedControl(TrackHandle *handle);
 
 #endif
