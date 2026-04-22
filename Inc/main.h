@@ -59,21 +59,8 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define LEFT_IN_Pin GPIO_PIN_0
-#define LEFT_IN_GPIO_Port GPIOA
-#define LEFT_OUT_Pin GPIO_PIN_1
-#define LEFT_OUT_GPIO_Port GPIOA
-#define RIGHT_IN_Pin GPIO_PIN_2
-#define RIGHT_IN_GPIO_Port GPIOA
-#define RIGHT_OUT_Pin GPIO_PIN_3
-#define RIGHT_OUT_GPIO_Port GPIOA
-#define LEFT_CONTROL_Pin GPIO_PIN_6
-#define LEFT_CONTROL_GPIO_Port GPIOB
-#define RIGHT_CONTROL_Pin GPIO_PIN_7
-#define RIGHT_CONTROL_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
-
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
